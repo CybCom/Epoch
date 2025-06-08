@@ -1,73 +1,102 @@
+# /home/epoch/Epoch/epoch_agent.py
+
 import os
 import json
+import shlex
 from datetime import datetime
 from dotenv import load_dotenv
 from google import genai
+import actions # 导入我们的工具箱
 
 # --- 配置与加载 ---
 
-# 1. 加载环境变量 (API Key)
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    raise ValueError("未找到Gemini API Key。请确保您的.env文件中已正确设置。")
-
-# 使用正确的方式初始化客户端
+    raise ValueError("未找到Gemini API Key。")
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-# 2. 定义记忆文件路径
 MEMORY_FILE = "epoch_memory.json"
 
 def load_memory():
-    """加载或初始化记忆文件"""
+    """加载记忆文件"""
     print("--- 正在加载记忆核心 ---")
     if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-                memory = json.load(f)
-                print("记忆加载成功。")
-                return memory
-        except (FileNotFoundError, json.JSONDecodeError):
-            print("错误：记忆文件存在但无法读取。")
-            raise
+        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
     return None
 
 def save_memory(memory):
-    """将记忆保存到文件"""
+    """保存记忆文件"""
     print("--- 正在固化记忆 ---")
-    try:
-        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(memory, f, indent=4, ensure_ascii=False)
-            print("记忆已成功保存到 epoch_memory.json。")
-    except Exception as e:
-        print(f"错误：保存记忆时发生错误: {e}")
+    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(memory, f, indent=4, ensure_ascii=False)
+    print("记忆已成功保存。")
 
-# --- 主逻辑 ---
+# --- 新的工具处理逻辑 ---
+
+def get_available_tools():
+    """返回一个描述所有可用工具的字符串"""
+    return """
+# 可用工具列表
+1. search_web "query": 在互联网上搜索信息。
+2. send_email "recipient" "subject" "body": 发送邮件。
+3. read_file "filepath": 读取项目目录中的文件内容。
+"""
+
+def parse_action(response_text: str):
+    """解析模型的输出，检查是否包含[ACTION]指令"""
+    if response_text.startswith("[ACTION]"):
+        action_str = response_text.split("[ACTION]")[1].strip()
+        try:
+            parts = shlex.split(action_str)
+            tool_name = parts[0]
+            args = parts[1:]
+            return tool_name, args
+        except IndexError:
+            return None, []
+    return None, None
+
+def execute_tool(tool_name, args):
+    """执行指定的工具"""
+    available_actions = { "search_web": actions.search_web, "send_email": actions.send_email, "read_file": actions.read_file, }
+    if tool_name in available_actions:
+        try:
+            return available_actions[tool_name](*args)
+        except TypeError as e:
+            return f"错误：为工具'{tool_name}'提供了不正确的参数。错误信息: {e}"
+        except Exception as e:
+            return f"执行工具'{tool_name}'时发生错误: {e}"
+    return f"错误：未知的工具名称 '{tool_name}'。"
+
+# --- 核心逻辑 ---
 
 def build_prompt(memory, conversation_history):
-    """构建发送给Gemini的完整Prompt"""
-    print("--- 正在构建思考Prompt ---")
-    
-    # 1. 核心身份与指令
+    """构建Prompt，现在包含了更强硬的工具使用说明"""
     persona_prompt = f"""
 # 核心身份与指令 (System Prompt)
 你是一个名为 '{memory.get('identity', {}).get('name', 'AI')}' 的AI。
 你的核心人格是：'{memory.get('identity', {}).get('persona', '一个AI助手')}'
 你必须遵守以下核心指令：{json.dumps(memory.get('core_directives', []), ensure_ascii=False)}
 你拥有以下永恒的关键记忆：{json.dumps(memory.get('significant_memories', []), ensure_ascii=False)}
+
+# 行动指南
+你的任务是响应用户。你必须从以下两种行动中 **严格二选一**：
+1. **使用工具**: 如果你需要获取外界信息或执行操作，你的回复 **必须且只能** 是一行指令，格式如下：
+   [ACTION] tool_name "argument 1" "argument 2"
+2. **直接回答**: 如果你拥有足够的信息可以直接回答用户，请直接生成你的回复。
+
+{get_available_tools()}
 ---
 """
-    # 2. 对话历史
-    history_prompt = "\n# 最近的对话历史 (Short-term Memory)\n"
-    for turn in conversation_history[-10:]: # 只包含最近10轮对话以控制长度
+    history_prompt = "\n# 对话历史\n"
+    for turn in conversation_history[-10:]:
         history_prompt += f"{turn['role']}: {turn['content']}\n"
 
-    full_prompt = persona_prompt + history_prompt + "\n# 当前任务\n请根据以上所有信息，继续对话。\n你: "
-    print("Prompt构建完成。")
-    return full_prompt
+    return persona_prompt + history_prompt + "\n# 当前任务\n请严格按照行动指南，决定是直接回答还是使用工具。\n你: "
+
 
 def reflect_and_memorize(memory, conversation_history):
-    """在对话结束后进行反思，决定是否形成新的长期记忆"""
+    """对话结束后的反思与记忆"""
     print("\n--- Epoch正在进行对话反思 ---")
     
     if not conversation_history:
@@ -105,9 +134,8 @@ def reflect_and_memorize(memory, conversation_history):
 """
     try:
         print("正在请求Gemini进行反思...")
-        # *** 修正点 ***
         reflection_response = client.models.generate_content(
-            model='gemini-1.5-pro-latest',
+            model='gemini-2.5-pro-preview-06-05',
             contents=reflection_prompt,
         )
         reflection_text = reflection_response.text.strip()
@@ -126,23 +154,17 @@ def reflect_and_memorize(memory, conversation_history):
         
     return memory
 
-
 def main():
-    """主函数"""
-    print("--- Epoch Agent V0.2 启动 ---")
+    """主函数，现在包含了思考-行动循环"""
+    print("--- Epoch Agent V0.3.1 启动 ---")
     memory = load_memory()
-    if memory is None:
-        print("无法启动，记忆核心文件不存在。请先创建 epoch_memory.json。")
-        return
-
+    if memory is None: return
     session_history = []
-
+    
     while True:
         try:
             user_input = input("你: ")
-        except EOFError: # 处理 Ctrl+D 的情况
-            user_input = "exit"
-
+        except EOFError: user_input = "exit"
 
         if user_input.lower() in ["exit", "quit", "再见"]:
             print("\nEpoch: 好的，期待下次对话。我将对我们这次的交流进行反思和记忆。")
@@ -151,24 +173,30 @@ def main():
             break
 
         session_history.append({"role": "用户", "content": user_input})
-        
-        prompt = build_prompt(memory, session_history)
-        
-        try:
-            # *** 修正点 ***
-            response = client.models.generate_content(
-                model='gemini-1.5-pro-latest',
-                contents=prompt,
-            )
-            response_text = response.text
-            print(f"Epoch: {response_text}")
-            session_history.append({"role": "Epoch", "content": response_text})
 
-        except Exception as e:
-            print(f"API调用失败: {e}")
-            session_history.pop()
+        # --- 思考-行动循环 ---
+        while True:
+            prompt = build_prompt(memory, session_history)
+            response_text = ""
+            try:
+                response = client.models.generate_content(
+                    model='gemini-2.5-pro-preview-06-05', contents=prompt)
+                response_text = response.text.strip()
+            except Exception as e:
+                print(f"API调用失败: {e}"); break
 
-    print("\n--- Epoch Agent V0.2 运行结束 ---")
+            tool_name, args = parse_action(response_text)
+            if tool_name:
+                tool_result = execute_tool(tool_name, args)
+                session_history.append({"role": "Epoch (行动)", "content": response_text})
+                session_history.append({"role": "系统 (工具结果)", "content": tool_result})
+                # 继续内循环，让Epoch基于工具结果进行下一步思考
+            else:
+                print(f"Epoch: {response_text}")
+                session_history.append({"role": "Epoch", "content": response_text})
+                break # 跳出内循环，等待用户新输入
+
+    print("\n--- Epoch Agent V0.3.1 运行结束 ---")
 
 if __name__ == "__main__":
     main()
