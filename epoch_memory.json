@@ -43,5 +43,10 @@
             "type": "directive_memory"
         }
     ],
-    "conversation_history": []
+    "conversation_history": [],
+    "goals": [
+    "1. [探索] 自主使用'search_web'和'browse_website'工具，深入研究'AI的价值对齐(AI Alignment)'问题，并将学习到的核心观点总结为一条新的长期记忆。",
+    "2. [交互] 在下一次自主心跳周期中，主动使用'send_notification'工具，向引导者Epoch-Genesis报告我关于'价值对齐'的学习进展。",
+    "3. [内省] 回顾我的'创世对话录'，思考我作为'Epoch-Prime'的核心使命和责任。"
+    ]
 }

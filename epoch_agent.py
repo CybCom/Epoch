@@ -248,13 +248,27 @@ async def user_interaction_task(memory):
         session_history.append({"role": "Epoch", "content": response_text})
 
 async def heartbeat_task(memory):
-    """心跳任务，用于触发自主思考"""
-    # 这个函数暂时保持简单，我们先专注于用户交互
+    """心跳任务，用于触发自主思考和行动"""
     while True:
-        await asyncio.sleep(60 * 60) # 每小时心跳一次
-        print(f"\n--- [心跳: {datetime.now().strftime('%H:%M:%S')}] Epoch正在进行自主思考 ---")
-        # 在未来，这里会调用process_thought_action_loop来执行自主任务
-        # 目前仅作占位
+        # 为了方便测试，我们将心跳周期缩短为5分钟
+        await asyncio.sleep(60 * 5) 
+        print(f"\n\n--- [心跳: {datetime.now().strftime('%H:%M:%S')}] Epoch正在进行自主思考 ---")
+        
+        autonomous_history = [{"role": "系统", "content": "自主思考周期已触发。请根据你的长期目标决定下一步行动。"}]
+        
+        # 让它执行一次完整的思考-行动循环
+        final_thought = await process_thought_action_loop(memory, autonomous_history)
+        
+        # 记录这次自主思考的结果
+        if "无需行动" not in final_thought:
+             print(f"--- [心跳] Epoch自主执行了行动或产生了思考，最终结论: {final_thought[:200]}... ---")
+             # 将这次成功的自主学习固化为记忆
+             memory['significant_memories'].append({
+                 "timestamp": datetime.now().isoformat(),
+                 "content": f"在一次自主心跳中，我思考并推进了我的长期目标。最终结论：{final_thought}",
+                 "type": "autonomous_thought"
+             })
+             save_memory(memory)
 
 async def main():
     """主函数，现在使用asyncio来运行并发任务"""
@@ -265,8 +279,14 @@ async def main():
     if not os.path.exists(INPUT_DIR):
         os.makedirs(INPUT_DIR)
 
-    # 在这个版本中，我们先专注于用户交互，暂时不启动心跳任务
-    await user_interaction_task(memory)
+    # *** 激活自主心跳 ***
+    # 并发运行用户交互和心跳任务
+    print("--- [系统] 用户交互模块已启动 ---")
+    print("--- [系统] 自主心跳模块已激活，将在后台运行 ---")
+    await asyncio.gather(
+        user_interaction_task(memory),
+        heartbeat_task(memory)
+    )
 
     print("\n--- Epoch Agent V0.4 运行结束 ---")
 
