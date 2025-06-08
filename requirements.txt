@@ -3,3 +3,6 @@ google-genai
 python-dotenv
 duckduckgo_search
 requests
+beautifulsoup4
+lxml
+pillow

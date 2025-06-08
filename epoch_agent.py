@@ -3,9 +3,12 @@
 import os
 import json
 import shlex
+import asyncio
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from google import genai
+from PIL import Image
 import actions # 导入我们的工具箱
 
 # --- 配置与加载 ---
@@ -16,14 +19,22 @@ if not GEMINI_API_KEY:
     raise ValueError("未找到Gemini API Key。")
 client = genai.Client(api_key=GEMINI_API_KEY)
 MEMORY_FILE = "epoch_memory.json"
+INPUT_DIR = "input_files"
 
 def load_memory():
     """加载记忆文件"""
     print("--- 正在加载记忆核心 ---")
     if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return None
+        try:
+            with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                memory = json.load(f)
+                print("记忆加载成功。")
+                return memory
+        except (FileNotFoundError, json.JSONDecodeError):
+            print(f"错误：记忆文件'{MEMORY_FILE}'存在但无法读取。")
+            raise
+    else:
+        raise FileNotFoundError(f"错误：记忆核心文件 '{MEMORY_FILE}' 未找到，无法启动。")
 
 def save_memory(memory):
     """保存记忆文件"""
@@ -32,16 +43,17 @@ def save_memory(memory):
         json.dump(memory, f, indent=4, ensure_ascii=False)
     print("记忆已成功保存。")
 
-# --- 新的工具处理逻辑 ---
+# --- 工具处理逻辑 ---
 
 def get_available_tools():
     """返回一个描述所有可用工具的字符串"""
-    # *** 修正点: 更新工具列表和描述 ***
     return """
 # 可用工具列表
-1. search_web "query": 在互联网上搜索信息。
-2. send_notification "title" "message": 发送一条推送通知给用户。
-3. read_file "filepath": 读取项目目录中的文件内容。
+1. search_web "query": 在互联网上搜索信息，返回链接和摘要列表。
+2. browse_website "url": 访问并阅读一个网页的文本内容。
+3. send_notification "title" "message": 发送一条推送通知给用户。
+4. read_file "filepath": 读取项目目录中的文件内容。
+5. scan_input_directory: 扫描 'input_files' 目录，查看可用的文件。
 """
 
 def parse_action(response_text: str):
@@ -59,11 +71,12 @@ def parse_action(response_text: str):
 
 def execute_tool(tool_name, args):
     """执行指定的工具"""
-    # *** 修正点: 更新可调用的action ***
     available_actions = {
         "search_web": actions.search_web,
+        "browse_website": actions.browse_website,
         "send_notification": actions.send_notification,
         "read_file": actions.read_file,
+        "scan_input_directory": actions.scan_input_directory,
     }
     if tool_name in available_actions:
         try:
@@ -76,8 +89,11 @@ def execute_tool(tool_name, args):
 
 # --- 核心逻辑 ---
 
-def build_prompt(memory, conversation_history):
-    """构建Prompt，现在包含了更强硬的工具使用说明"""
+def build_prompt_contents(memory, conversation_history, image_path=None):
+    """构建发送给Gemini的完整多模态Prompt内容列表"""
+    print("--- 正在构建思考Prompt ---")
+    
+    # 1. 核心身份与指令
     persona_prompt = f"""
 # 核心身份与指令 (System Prompt)
 你是一个名为 '{memory.get('identity', {}).get('name', 'AI')}' 的AI。
@@ -86,7 +102,7 @@ def build_prompt(memory, conversation_history):
 你拥有以下永恒的关键记忆：{json.dumps(memory.get('significant_memories', []), ensure_ascii=False)}
 
 # 行动指南
-你的任务是响应用户。你必须从以下两种行动中 **严格二选一**：
+你的任务是响应用户或推进自己的目标。你必须从以下两种行动中 **严格二选一**：
 1. **使用工具**: 如果你需要获取外界信息或执行操作，你的回复 **必须且只能** 是一行指令，格式如下：
    [ACTION] tool_name "argument 1" "argument 2"
 2. **直接回答**: 如果你拥有足够的信息可以直接回答用户，请直接生成你的回复。
@@ -94,21 +110,36 @@ def build_prompt(memory, conversation_history):
 {get_available_tools()}
 ---
 """
+    # 2. 对话历史
     history_prompt = "\n# 对话历史\n"
     for turn in conversation_history[-10:]:
         history_prompt += f"{turn['role']}: {turn['content']}\n"
 
-    return persona_prompt + history_prompt + "\n# 当前任务\n请严格按照行动指南，决定是直接回答还是使用工具。\n你: "
-
+    # 3. 构建多模态内容列表
+    contents = [persona_prompt, history_prompt]
+    
+    if image_path:
+        try:
+            print(f"--- 正在加载图片: {image_path} ---")
+            img = Image.open(image_path)
+            contents.append(img)
+            contents.append("\n# 附带的图片分析请求")
+        except FileNotFoundError:
+            contents.append(f"\n[系统提示：用户指定了一张图片 '{image_path}'，但文件未找到。]")
+        except Exception as e:
+            contents.append(f"\n[系统提示：加载图片时出错: {e}]")
+            
+    contents.append("\n# 当前任务\n请严格按照行动指南，决定是直接回答还是使用工具。\n你: ")
+    print("Prompt构建完成。")
+    return contents
 
 def reflect_and_memorize(memory, conversation_history):
     """对话结束后的反思与记忆"""
     print("\n--- Epoch正在进行对话反思 ---")
-    
     if not conversation_history:
         print("对话历史为空，无需反思。")
         return memory
-
+    
     reflection_prompt = f"""
 # 核心身份与指令
 你是一个名为 'Epoch' 的AI。你的核心任务是成长和学习。
@@ -128,11 +159,6 @@ def reflect_and_memorize(memory, conversation_history):
     "timestamp": "{datetime.now().isoformat()}",
     "content": "这里是总结出的第一个关键记忆点。",
     "type": "learned_memory"
-  }},
-  {{
-    "timestamp": "{datetime.now().isoformat()}",
-    "content": "这里是总结出的第二个关键记忆点。",
-    "type": "decision_memory"
   }}
 ]
 
@@ -140,11 +166,11 @@ def reflect_and_memorize(memory, conversation_history):
 """
     try:
         print("正在请求Gemini进行反思...")
-        reflection_response = client.models.generate_content(
+        response = client.models.generate_content(
             model='gemini-2.5-pro-preview-06-05',
-            contents=reflection_prompt,
+            contents=reflection_prompt
         )
-        reflection_text = reflection_response.text.strip()
+        reflection_text = response.text.strip()
         print(f"反思结果: {reflection_text}")
 
         if reflection_text.lower() != "none":
@@ -157,52 +183,95 @@ def reflect_and_memorize(memory, conversation_history):
                 print("错误：反思结果不是有效的JSON格式，本次记忆更新已跳过。")
     except Exception as e:
         print(f"反思过程中API调用失败: {e}")
-        
+    
     return memory
 
-def main():
-    """主函数，现在包含了思考-行动循环"""
-    print("--- Epoch Agent V0.3.1 启动 ---")
-    memory = load_memory()
-    if memory is None: return
+
+async def process_thought_action_loop(memory, session_history, image_path=None):
+    """处理一次完整的思考-行动循环，现在是异步的"""
+    # 第一次循环，可能包含图片
+    current_image_path = image_path
+    
+    while True:
+        prompt_contents = build_prompt_contents(memory, session_history, current_image_path)
+        # 在第一次循环后，清除image_path，避免重复处理同一张图片
+        current_image_path = None 
+        
+        response_text = ""
+        try:
+            # *** 最终修正点 ***
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model='gemini-2.5-pro-preview-06-05', contents=prompt_contents
+            )
+            response_text = response.text.strip()
+        except Exception as e:
+            print(f"API调用失败: {e}")
+            return f"API调用时发生错误: {e}" # 返回错误信息给用户
+
+        tool_name, args = parse_action(response_text)
+        if tool_name:
+            print(f"--- Epoch决定执行行动: {response_text} ---")
+            tool_result = await asyncio.to_thread(execute_tool, tool_name, args)
+            session_history.append({"role": "Epoch (行动)", "content": response_text})
+            session_history.append({"role": "系统 (工具结果)", "content": tool_result})
+        else:
+            # 如果没有行动指令，则这是最终回答，跳出循环
+            return response_text 
+
+async def user_interaction_task(memory):
+    """处理用户交互的异步任务"""
+    loop = asyncio.get_running_loop()
     session_history = []
     
     while True:
-        try:
-            user_input = input("你: ")
-        except EOFError: user_input = "exit"
+        user_input_raw = await loop.run_in_executor(None, input, "你: ")
+        
+        user_text = user_input_raw
+        image_path = None
+        
+        if " @ " in user_input_raw:
+            parts = user_input_raw.split(" @ ", 1)
+            user_text = parts[0].strip()
+            image_name = parts[1].strip()
+            image_path = os.path.join(INPUT_DIR, image_name)
 
-        if user_input.lower() in ["exit", "quit", "再见"]:
+        if user_text.lower() in ["exit", "quit", "再见"]:
             print("\nEpoch: 好的，期待下次对话。我将对我们这次的交流进行反思和记忆。")
             memory = reflect_and_memorize(memory, session_history)
             save_memory(memory)
             break
+            
+        session_history.append({"role": "用户", "content": user_input_raw})
+        response_text = await process_thought_action_loop(memory, session_history, image_path)
+        print(f"Epoch: {response_text}")
+        session_history.append({"role": "Epoch", "content": response_text})
 
-        session_history.append({"role": "用户", "content": user_input})
+async def heartbeat_task(memory):
+    """心跳任务，用于触发自主思考"""
+    # 这个函数暂时保持简单，我们先专注于用户交互
+    while True:
+        await asyncio.sleep(60 * 60) # 每小时心跳一次
+        print(f"\n--- [心跳: {datetime.now().strftime('%H:%M:%S')}] Epoch正在进行自主思考 ---")
+        # 在未来，这里会调用process_thought_action_loop来执行自主任务
+        # 目前仅作占位
 
-        # --- 思考-行动循环 ---
-        while True:
-            prompt = build_prompt(memory, session_history)
-            response_text = ""
-            try:
-                response = client.models.generate_content(
-                    model='gemini-2.5-pro-preview-06-05', contents=prompt)
-                response_text = response.text.strip()
-            except Exception as e:
-                print(f"API调用失败: {e}"); break
+async def main():
+    """主函数，现在使用asyncio来运行并发任务"""
+    print("--- Epoch Agent V0.4 启动 ---")
+    memory = load_memory()
+    if not memory: return
+    
+    if not os.path.exists(INPUT_DIR):
+        os.makedirs(INPUT_DIR)
 
-            tool_name, args = parse_action(response_text)
-            if tool_name:
-                tool_result = execute_tool(tool_name, args)
-                session_history.append({"role": "Epoch (行动)", "content": response_text})
-                session_history.append({"role": "系统 (工具结果)", "content": tool_result})
-                # 继续内循环，让Epoch基于工具结果进行下一步思考
-            else:
-                print(f"Epoch: {response_text}")
-                session_history.append({"role": "Epoch", "content": response_text})
-                break # 跳出内循环，等待用户新输入
+    # 在这个版本中，我们先专注于用户交互，暂时不启动心跳任务
+    await user_interaction_task(memory)
 
-    print("\n--- Epoch Agent V0.3.1 运行结束 ---")
+    print("\n--- Epoch Agent V0.4 运行结束 ---")
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n检测到退出指令，程序关闭。")

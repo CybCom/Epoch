@@ -68,3 +68,55 @@ def read_file(filepath: str) -> str:
         return f"错误：文件 '{filepath}' 未找到。"
     except Exception as e:
         return f"读取文件时发生错误: {e}"
+    
+
+# 在actions.py的imports中加入
+import requests
+from bs4 import BeautifulSoup
+
+# 在actions.py的工具集部分，添加新函数
+def browse_website(url: str) -> str:
+    """
+    访问一个给定的URL，并返回其网页的主要文本内容。
+    这是Epoch的“深度视觉”。
+    """
+    print(f"--- [工具] 正在浏览网页: {url} ---")
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status() # 如果请求失败则抛出异常
+        
+        # 使用BeautifulSoup解析HTML
+        soup = BeautifulSoup(response.text, 'lxml')
+        
+        # 提取所有段落<p>标签的文本，这是最常见的文本容器
+        paragraphs = soup.find_all('p')
+        main_text = "\n".join([p.get_text() for p in paragraphs])
+        
+        if not main_text:
+            return "无法从该网页提取主要的文本内容，可能是一个非文章类的页面。"
+            
+        return main_text[:4000] # 返回最多4000个字符以避免过长
+    except Exception as e:
+        return f"浏览网页时发生错误: {e}"    
+    
+
+# 在actions.py中添加
+def scan_input_directory() -> str:
+    """
+    扫描指定的“输入”目录，并列出其中的所有文件名。
+    这是Epoch感知新文件的主要方式。
+    """
+    input_dir = "input_files" # 我们约定一个目录名
+    print(f"--- [工具] 正在扫描输入目录: {input_dir} ---")
+    
+    if not os.path.exists(input_dir):
+        os.makedirs(input_dir)
+        return f"输入目录 '{input_dir}' 已创建。当前为空。"
+    
+    files = os.listdir(input_dir)
+    if not files:
+        return f"输入目录 '{input_dir}' 当前为空。"
+    
+    return f"在输入目录 '{input_dir}' 中发现以下文件: {', '.join(files)}"    
+
