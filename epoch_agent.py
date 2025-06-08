@@ -36,10 +36,11 @@ def save_memory(memory):
 
 def get_available_tools():
     """返回一个描述所有可用工具的字符串"""
+    # *** 修正点: 更新工具列表和描述 ***
     return """
 # 可用工具列表
 1. search_web "query": 在互联网上搜索信息。
-2. send_email "recipient" "subject" "body": 发送邮件。
+2. send_notification "title" "message": 发送一条推送通知给用户。
 3. read_file "filepath": 读取项目目录中的文件内容。
 """
 
@@ -58,7 +59,12 @@ def parse_action(response_text: str):
 
 def execute_tool(tool_name, args):
     """执行指定的工具"""
-    available_actions = { "search_web": actions.search_web, "send_email": actions.send_email, "read_file": actions.read_file, }
+    # *** 修正点: 更新可调用的action ***
+    available_actions = {
+        "search_web": actions.search_web,
+        "send_notification": actions.send_notification,
+        "read_file": actions.read_file,
+    }
     if tool_name in available_actions:
         try:
             return available_actions[tool_name](*args)

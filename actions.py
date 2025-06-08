@@ -1,16 +1,14 @@
 # /home/epoch/Epoch/actions.py
 
 import os
-import smtplib
-from email.mime.text import MIMEText
+import requests # 使用requests库来发送HTTP请求
 from duckduckgo_search import DDGS
-import time
 
 # --- 工具集 ---
 
 def search_web(query: str, max_results: int = 5) -> str:
     """
-    使用DuckDuckGo进行网络搜索，并处理频率限制问题。
+    使用DuckDuckGo进行网络搜索。
     """
     print(f"--- [工具] 正在执行网络搜索: {query} ---")
     try:
@@ -29,39 +27,27 @@ def search_web(query: str, max_results: int = 5) -> str:
             error_message += "\n提示：这可能是由于访问频率过高。建议等待一段时间再试。"
         return error_message
 
-def send_email(recipient: str, subject: str, body: str) -> str:
+def send_notification(title: str, message: str) -> str:
     """
-    使用配置好的Outlook邮箱发送邮件。
+    *** 已重构 ***
+    使用 ntfy.sh 发送一条推送通知。
+    这是Epoch的“声音”。
     """
-    print(f"--- [工具] 正在发送邮件给: {recipient} ---")
-    sender_email = os.getenv("OUTLOOK_EMAIL")
-    password = os.getenv("OUTLOOK_PASSWORD") 
-
-    if not sender_email or not password:
-        return "错误：发件人邮箱或密码未在.env文件中配置。"
-
-    msg = MIMEText(body)
-    msg['Subject'] = subject
-    msg['From'] = sender_email
-    msg['To'] = recipient
-
-    try:
-        smtp_server = 'smtp-mail.outlook.com'
-        smtp_port = 587
-        print(f"--- [调试] 尝试连接到 {smtp_server}:{smtp_port} ---")
+    topic = os.getenv("NTFY_TOPIC")
+    if not topic:
+        return "错误：NTFY_TOPIC 未在.env文件中配置。"
         
-        # *** 修正点: 在创建SMTP实例时，明确指定local_hostname ***
-        with smtplib.SMTP(smtp_server, smtp_port, local_hostname='localhost') as server:
-            print("--- [调试] 连接成功，启动TLS... ---")
-            server.starttls()
-            print("--- [调试] TLS启动，正在登录... ---")
-            server.login(sender_email, password)
-            print("--- [调试] 登录成功，正在发送邮件... ---")
-            server.sendmail(sender_email, [recipient], msg.as_string())
-            print("--- [调试] 邮件已发送。 ---")
-        return "邮件发送成功。"
+    print(f"--- [工具] 正在发送通知到ntfy主题: {topic} ---")
+    
+    try:
+        requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode('utf-8'), # 消息正文
+            headers={ "Title": title.encode('utf-8') } # 标题
+        )
+        return f"通知已成功发送至主题'{topic}'。"
     except Exception as e:
-        return f"邮件发送时发生严重错误: {e.__class__.__name__}: {e}"
+        return f"发送通知时发生严重错误: {e.__class__.__name__}: {e}"
 
 
 def read_file(filepath: str) -> str:
