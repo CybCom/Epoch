@@ -11,6 +11,8 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("未找到Gemini API Key。请确保您的.env文件中已正确设置。")
+
+# 使用正确的方式初始化客户端
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # 2. 定义记忆文件路径
@@ -26,7 +28,7 @@ def load_memory():
             return memory
     except FileNotFoundError:
         print("警告：未找到记忆文件。将使用空记忆。")
-        return {} # 在未来，这里可以创建一个默认的记忆结构
+        return {}
     except json.JSONDecodeError:
         print("错误：记忆文件格式不正确。")
         raise
@@ -47,8 +49,6 @@ def build_prompt(memory, user_input):
 ---
 """
     
-    # 组合成最终的prompt
-    # 在未来，这里会加入对话历史
     full_prompt = persona_prompt + f"\n# 用户当前的请求\n用户: {user_input}\n你: "
     print("Prompt构建完成。")
     return full_prompt
@@ -65,20 +65,19 @@ def main():
     prompt = build_prompt(memory, user_input)
     
     print("\n--- 正在与Gemini API通信 ---")
-    # print("\n--- 发送的完整Prompt如下 ---") # 调试时可以取消注释
-    # print(prompt)
-    # print("--------------------------")
     
     # 调用API
     try:
+        # 修正1: 使用 client.models.generate_content
         response = client.models.generate_content(
-            model='gemini-2.5-pro-preview-06-05',
+            model='gemini-1.5-pro-latest',
             contents=prompt,
         )
         print("--- 已收到Gemini的回复 ---")
         
         # 打印结果
         print("\n=== Epoch的回应 ===\n")
+        # 修正2: 使用 response.text
         print(response.text)
         print("\n====================\n")
         
@@ -89,4 +88,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+
